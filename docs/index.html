@@ -6,7 +6,7 @@
 <title>Match Predictor</title>
 <link href="https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#0b0d12;--card:#12151c;--bd:#222733;--tx:#e7e9ee;--mu:#8b93a7;--ac:#7c8cff;--wa:#fbbf24;--ok:#4ade80;color-scheme:dark}
+:root{--bg:#0b0d12;--card:#12151c;--bd:#222733;--tx:#e7e9ee;--mu:#8b93a7;--ac:#7c8cff;--wa:#fbbf24;--ok:#4ade80;--rd:#f87171;color-scheme:dark}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--tx);font-family:'Lexend',system-ui,sans-serif;font-weight:300;line-height:1.5;padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
 .w{max-width:760px;margin:0 auto;padding:20px 16px 40px}
@@ -17,18 +17,29 @@ input:focus{outline:none;border-color:var(--ac)}
 .chip{background:var(--card);border:1px solid var(--bd);color:var(--mu);border-radius:999px;padding:5px 12px;font:inherit;font-size:13px;cursor:pointer}
 .chip.on{background:var(--ac);border-color:var(--ac);color:#0b0d12;font-weight:500}
 h2{font-size:13px;font-weight:500;color:var(--mu);text-transform:uppercase;letter-spacing:.08em;margin:18px 0 8px}
+details{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:12px 14px;margin-bottom:10px;font-size:13px}
+summary{cursor:pointer;font-size:14px;font-weight:400}details p,details li{color:var(--mu)}details b{color:var(--tx);font-weight:400}
 .m{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:12px 14px;margin-bottom:8px;cursor:pointer}
 .m:hover{border-color:var(--ac)}
 .top{display:flex;justify-content:space-between;gap:8px;font-size:15px;font-weight:400}
-.top span:last-child{text-align:right}.meta{color:var(--mu);font-size:12px;margin:2px 0 8px}
+.top span:last-child{text-align:right}.meta{display:flex;justify-content:space-between;align-items:center;color:var(--mu);font-size:12px;margin:2px 0 8px}
 .bar{display:flex;height:8px;border-radius:5px;overflow:hidden}.bar i{display:block}
 .pc{display:flex;justify-content:space-between;font-size:12px;color:var(--mu);margin-top:4px}
-.det{display:none;margin-top:12px;border-top:1px solid var(--bd);padding-top:12px}.m.open .det{display:block}
-.g{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
-.st{background:var(--bg);border:1px solid var(--bd);border-radius:10px;padding:8px;text-align:center}
-.st b{display:block;font-size:18px;font-weight:600}.st small{color:var(--mu);font-size:11px}
-.sc{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.sc span{background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:3px 9px;font-size:12px}
+.det{display:none;margin-top:12px;border-top:1px solid var(--bd);padding-top:4px}.m.open .det{display:block}
+.sec{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--mu);margin:14px 0 6px}
+.g{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.st{background:var(--bg);border:1px solid var(--bd);border-radius:10px;padding:8px 4px;text-align:center}
+.st b{display:block;font-size:17px;font-weight:600}.st small{color:var(--mu);font-size:11px;display:block}
+.sc{display:flex;flex-wrap:wrap;gap:6px}.sc span{background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:3px 9px;font-size:12px}
+.badge{display:inline-block;border-radius:999px;padding:1px 9px;font-size:11px;font-weight:500}
+.Alta{background:rgba(74,222,128,.15);color:var(--ok)}.Media{background:rgba(251,191,36,.15);color:var(--wa)}.Baja{background:rgba(248,113,113,.15);color:var(--rd)}
+ul{margin:6px 0 0;padding-left:18px}li{font-size:12px;color:var(--mu)}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}.tm b{font-weight:500;font-size:13px}.s2{color:var(--mu);font-size:12px}
+.mb{height:6px;background:var(--bg);border-radius:4px;margin:3px 0 8px;overflow:hidden}.mb i{display:block;height:100%;background:var(--ac)}
+.f{display:inline-block;min-width:42px;text-align:center;border-radius:6px;padding:1px 5px;font-size:11px;margin:0 3px 3px 0}
+.f.G{background:rgba(74,222,128,.15);color:var(--ok)}.f.E{background:rgba(139,147,167,.2);color:var(--mu)}.f.P{background:rgba(248,113,113,.15);color:var(--rd)}
 .mk{font-size:12px;color:var(--mu);margin-top:10px}.mk b{color:var(--tx);font-weight:400}
+table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}td,th{padding:4px 2px;border-bottom:1px solid var(--bd);text-align:right;font-weight:300}td:first-child,th:first-child{text-align:left}th{color:var(--mu)}
 #msg{color:var(--mu);font-size:14px;padding:20px 0;text-align:center}
 </style>
 </head>
@@ -38,12 +49,22 @@ h2{font-size:13px;font-weight:500;color:var(--mu);text-transform:uppercase;lette
 <p class="s" id="up">Cargando…</p>
 <input id="q" type="text" placeholder="Buscar equipo…">
 <div class="chips" id="lg"></div>
+<div id="cal"></div>
 <div id="list"></div>
 <div id="msg"></div>
+<details><summary>¿A qué está sujeta cada predicción?</summary>
+<ul>
+<li><b>Qué usa:</b> los goles de los últimos ~3 años (más peso a lo reciente) para estimar el ataque y la defensa de cada equipo, más la ventaja de jugar en casa.</li>
+<li><b>Qué no ve:</b> alineaciones, lesiones y sanciones, cansancio, motivación, clima, árbitro ni fichajes recientes. Un cambio de última hora puede mover mucho un partido.</li>
+<li><b>"Goles esperados"</b> son los del modelo (promedio de goles que implican los ratings), no el xG de tiros.</li>
+<li><b>Champions:</b> equipos de ligas distintas se comparan solo por sus cruces europeos, así que hay más incertidumbre. Los equipos con poco historial se acercan al promedio.</li>
+<li><b>Rangos entre paréntesis:</b> cuánto cambia la probabilidad si el modelo recuerda más o menos el pasado. Indican sensibilidad, no son un intervalo estadístico formal.</li>
+<li><b>Mercado:</b> las cuotas de casas suelen ser más precisas que este modelo. Úsalo como referencia, no como garantía ni consejo de apuestas.</li>
+</ul></details>
 </div>
 <script>
 let D=null,liga='';
-const $=id=>document.getElementById(id),pc=x=>(x*100).toFixed(0)+'%';
+const $=id=>document.getElementById(id),pc=x=>(x*100).toFixed(0)+'%',p1=x=>(x*100).toFixed(1)+'%',sg=x=>(x>=0?'+':'')+x.toFixed(0);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 fetch('predicciones.json?'+Date.now()).then(r=>{if(!r.ok)throw 0;return r.json()}).then(d=>{D=d;init()}).catch(()=>{
  $('up').textContent='';$('msg').textContent='No pude cargar predicciones.json. Si abriste el archivo directo, sírvelo con GitHub Pages o con "python -m http.server" dentro de /docs.'});
@@ -52,23 +73,45 @@ function init(){
  const ks=Object.keys(D.ligas);
  $('lg').innerHTML=['',...ks].map(k=>`<button class="chip${k===liga?' on':''}" data-k="${k}">${k?esc(D.ligas[k].nombre):'Todas'}</button>`).join('');
  $('lg').querySelectorAll('button').forEach(b=>b.onclick=()=>{liga=b.dataset.k;init()});
+ const c=D.calibracion;
+ $('cal').innerHTML=c?`<details><summary>¿Qué tan confiable es el modelo? (prueba histórica)</summary>
+ <p>En <b>${c.n}</b> partidos recientes de las 5 ligas, predichos usando solo datos anteriores a cada uno, el resultado que el modelo veía más probable ocurrió el <b>${pc(c.acierto)}</b> de las veces (apostar siempre al local: ${pc(c.base_local)}).</p>
+ ${c.logloss_mercado?`<p>Error probabilístico (log loss, menor es mejor) en ${c.n_mercado} partidos con cuotas: modelo <b>${c.logloss_modelo_vs_mercado}</b> vs. mercado <b>${c.logloss_mercado}</b>.</p>`:''}
+ <table><tr><th>Cuando el favorito tenía</th><th>Partidos</th><th>Modelo decía</th><th>Ocurrió</th></tr>${c.bins.map(b=>`<tr><td>${b[0]}</td><td>${b[1]}</td><td>${p1(b[2])}</td><td>${p1(b[3])}</td></tr>`).join('')}</table>
+ <p>Si "decía" y "ocurrió" se parecen, las probabilidades son confiables en ese tramo.</p></details>`:'';
  render()}
+const eq=(n,i)=>`<div class="tm"><b>${esc(n)}</b>
+ <div class="s2">Ataque ${i.ataque}× (${sg((i.ataque-1)*100)}% vs promedio)</div><div class="mb"><i style="width:${Math.min(100,i.ataque*50)}%"></i></div>
+ <div class="s2">Defensa ${i.defensa}× · concede ${sg((i.defensa-1)*100)}% vs promedio</div><div class="mb"><i style="width:${Math.max(0,Math.min(100,(2-i.defensa)*50))}%"></i></div>
+ <div>${i.forma.map(f=>`<span class="f ${f[0]}" title="vs ${esc(f[2])} (${f[3]==='L'?'local':'visita'})">${f[0]} ${f[1]}</span>`).join('')}</div>
+ <div class="s2">${i.n} partidos en el modelo</div></div>`;
+const bx=(v,l)=>`<div class="st"><b>${v}</b><small>${l}</small></div>`;
 function render(){
  const q=$('q').value.toLowerCase(),ps=D.partidos.filter(p=>(!liga||p.liga===liga)&&(p.local+' '+p.visitante).toLowerCase().includes(q));
  let h='',day='';
  for(const p of ps){
   if(p.fecha!==day){day=p.fecha;h+=`<h2>${new Date(day+'T00:00').toLocaleDateString('es',{weekday:'long',day:'numeric',month:'long'})}</h2>`}
+  const r=p.rango,rg=k=>`<small>${pc(r[k][0])}–${pc(r[k][1])}</small>`;
   const mk=p.mercado?`<div class="mk">Mercado (sin margen): <b>${p.mercado.map(pc).join(' · ')}</b> · Modelo: <b>${[p.p1,p.px,p.p2].map(pc).join(' · ')}</b></div>`:'';
   h+=`<div class="m"><div class="top"><span>${esc(p.local)}</span><span>${esc(p.visitante)}</span></div>
-  <div class="meta">${esc(D.ligas[p.liga].nombre)}${p.etapa?' · '+esc(p.etapa):''}${p.hora?' · '+esc(p.hora):''}</div>
+  <div class="meta"><span>${esc(D.ligas[p.liga].nombre)}${p.etapa?' · '+esc(p.etapa):''}${p.hora?' · '+esc(p.hora):''}</span><span class="badge ${p.confianza}">Confianza ${p.confianza}</span></div>
   <div class="bar"><i style="width:${p.p1*100}%;background:var(--ac)"></i><i style="width:${p.px*100}%;background:var(--mu)"></i><i style="width:${p.p2*100}%;background:var(--wa)"></i></div>
   <div class="pc"><span>${pc(p.p1)}</span><span>${pc(p.px)}</span><span>${pc(p.p2)}</span></div>
-  <div class="det"><div class="g">
-  <div class="st"><b>${p.xg_l} – ${p.xg_v}</b><small>xG local – visitante</small></div>
-  <div class="st"><b>${(1/p.p1).toFixed(2)} · ${(1/p.px).toFixed(2)} · ${(1/p.p2).toFixed(2)}</b><small>Cuotas justas 1 · X · 2</small></div>
-  <div class="st"><b>${pc(p.o25)}</b><small>Más de 2.5 goles</small></div>
-  <div class="st"><b>${pc(p.btts)}</b><small>Ambos anotan</small></div></div>
-  <div class="sc">${p.top.map(s=>`<span>${s[0]} · ${(s[1]*100).toFixed(1)}%</span>`).join('')}</div>${mk}</div></div>`}
+  <div class="det">
+  <div class="sec">Resultado (con rango según la memoria del modelo)</div>
+  <div class="g">${bx(pc(p.p1)+rg('p1'),'Gana local')}${bx(pc(p.px)+rg('px'),'Empate')}${bx(pc(p.p2)+rg('p2'),'Gana visitante')}</div>
+  <div class="g" style="margin-top:8px">${bx(pc(p.p1+p.px),'Local o empate (1X)')}${bx(pc(p.px+p.p2),'Empate o visita (X2)')}${bx(pc(p.p1+p.p2),'Sin empate (12)')}</div>
+  <div class="s2" style="margin-top:6px">Cuotas justas 1 · X · 2: ${(1/p.p1).toFixed(2)} · ${(1/p.px).toFixed(2)} · ${(1/p.p2).toFixed(2)}${mk?'':''}</div>
+  <div class="sec">Goles</div>
+  <div class="g">${bx(p.xg_l+' – '+p.xg_v,'Goles esperados (modelo)')}${bx((p.xg_l+p.xg_v).toFixed(2),'Total esperado')}${bx(pc(p.btts),'Ambos anotan')}
+  ${bx(pc(p.o15),'Más de 1.5')}${bx(pc(p.o25),'Más de 2.5')}${bx(pc(p.o35),'Más de 3.5')}
+  ${bx(pc(p.cs_l),'Local no recibe gol')}${bx(pc(p.cs_v),'Visita no recibe gol')}${bx(pc(p.h2),'Local gana por 2+')}</div>
+  <div class="sec">Marcadores más probables</div><div class="sc">${p.top.map(s=>`<span>${s[0]} · ${p1(s[1])}</span>`).join('')}</div>
+  <div class="sec">Equipos (ataque/defensa vs promedio · últimos 5, el más reciente primero)</div>
+  <div class="cols">${eq(p.local,p.info_l)}${eq(p.visitante,p.info_v)}</div>
+  <div class="sec">Confiabilidad de este partido</div>
+  <span class="badge ${p.confianza}">Confianza ${p.confianza}</span><ul>${p.razones.map(x=>`<li>${esc(x)}</li>`).join('')}${p.p1<.45&&p.p2<.45?'<li>Partido parejo: ningún resultado supera el 45%, la incertidumbre es natural.</li>':''}</ul>
+  ${mk}</div></div>`}
  $('list').innerHTML=h;
  $('msg').textContent=ps.length?'':(D.partidos.length?'Sin resultados para ese filtro.':'Aún no hay predicciones. Ejecuta la acción "Actualizar predicciones" en GitHub o espera al próximo ciclo diario.');
  $('list').querySelectorAll('.m').forEach(m=>m.onclick=()=>m.classList.toggle('open'))}
