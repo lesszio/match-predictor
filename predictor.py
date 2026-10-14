@@ -2,7 +2,7 @@
 """Genera docs/predicciones.json: Dixon-Coles para las 5 grandes ligas.
 Solo usa la librería estándar. Fuente: football-data.co.uk"""
 import csv, difflib, io, json, math, os, re, unicodedata, urllib.request
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 try:
     from zoneinfo import ZoneInfo
@@ -17,6 +17,8 @@ MIN_PARTIDOS = 10     # mínimo de partidos por equipo para predecir
 BASE = "https://www.football-data.co.uk"
 PAIS = {"E0": "ENG", "SP1": "ESP", "I1": "ITA", "D1": "GER", "F1": "FRA"}
 PRIOR = 3.0          # contracción hacia el promedio para equipos con poca muestra (Champions)
+XIS = (0.0012, 0.0025, 0.0050)   # memoria larga / central / corta: mide la sensibilidad
+CUOTAS = {}          # (fecha, local, visitante) -> prob. implícitas del mercado, para el backtest
 MIN_CL = 6           # mínimo de partidos por equipo para predecir Champions
 OF_URL = "https://raw.githubusercontent.com/openfootball/champions-league/master/{t}/cl.txt"
 SALIDA = Path(__file__).parent / "docs" / "predicciones.json"
@@ -62,6 +64,7 @@ def historial(div):
                 continue
             if d and r.get("HomeTeam") and r.get("AwayTeam"):
                 out.append((d, r["HomeTeam"], r["AwayTeam"], hg, ag))
+                CUOTAS[(d, r["HomeTeam"], r["AwayTeam"])] = mercado(r)
     return out
 
 
@@ -77,10 +80,10 @@ def tau(x, y, l, m, r):
     return 1.0
 
 
-def ajustar(ms, prior=0.0):
+def ajustar(ms, prior=0.0, xi=XI):
     """Ataque/defensa/localía por punto fijo ponderado + rho de Dixon-Coles."""
     hoy = max(m[0] for m in ms)
-    w = [math.exp(-XI * (hoy - m[0]).days) for m in ms]
+    w = [math.exp(-xi * (hoy - m[0]).days) for m in ms]
     eq = sorted({m[1] for m in ms} | {m[2] for m in ms})
     n = dict.fromkeys(eq, 0)
     for m in ms:
@@ -128,21 +131,108 @@ def predecir(M, h, a, N=10):
     P, s = {}, 0.0
     for x in range(N):
         for y in range(N):
-            p = pois(x, l) * pois(y, m) * max(tau(x, y, l, m, M["rho"]), 0.0)
-            P[(x, y)] = p; s += p
-    w = d = v = o = b = 0.0
-    for (x, y), p in P.items():
-        p /= s
-        if x > y: w += p
-        elif x == y: d += p
-        else: v += p
-        if x + y > 2: o += p
-        if x > 0 and y > 0: b += p
-    top = sorted(P.items(), key=lambda kv: -kv[1])[:5]
-    return {"xg_l": round(l, 2), "xg_v": round(m, 2),
-            "p1": round(w, 4), "px": round(d, 4), "p2": round(v, 4),
-            "o25": round(o, 4), "btts": round(b, 4),
-            "top": [[f"{x}-{y}", round(p / s, 4)] for (x, y), p in top]}
+            q = pois(x, l) * pois(y, m) * max(tau(x, y, l, m, M["rho"]), 0.0)
+            P[(x, y)] = q; s += q
+    w = d = v = o15 = o25 = o35 = b = csl = csv = h2 = 0.0
+    for (x, y), q in P.items():
+        q /= s
+        if x > y: w += q
+        elif x == y: d += q
+        else: v += q
+        t = x + y
+        if t > 1: o15 += q
+        if t > 2: o25 += q
+        if t > 3: o35 += q
+        if x > 0 and y > 0: b += q
+        if y == 0: csl += q
+        if x == 0: csv += q
+        if x - y >= 2: h2 += q
+    top = sorted(P.items(), key=lambda kv: -kv[1])[:6]
+    r4 = lambda z: round(z, 4)
+    return {"xg_l": round(l, 2), "xg_v": round(m, 2), "p1": r4(w), "px": r4(d), "p2": r4(v),
+            "o15": r4(o15), "o25": r4(o25), "o35": r4(o35), "btts": r4(b),
+            "cs_l": r4(csl), "cs_v": r4(csv), "h2": r4(h2),
+            "top": [[f"{x}-{y}", r4(q / s)] for (x, y), q in top]}
+
+
+def indice(ms):
+    idx = {}
+    for d, h, a, hg, ag in sorted(ms, key=lambda m: m[0], reverse=True):
+        idx.setdefault(h, []).append((a, hg, ag, "L"))
+        idx.setdefault(a, []).append((h, ag, hg, "V"))
+    return idx
+
+
+def forma(idx, t):
+    return [["G" if gf > gc else "E" if gf == gc else "P", f"{gf}-{gc}", rival, lv]
+            for rival, gf, gc, lv in idx.get(t, [])[:5]]
+
+
+def confianza(n1, n2, rango, cl):
+    amp = max(r[1] - r[0] for r in rango.values())
+    nmin = min(n1, n2)
+    nivel = "Alta" if nmin >= 60 and amp <= 0.06 else "Media" if nmin >= 25 and amp <= 0.12 else "Baja"
+    razones = [f"Historial usado: {n1} y {n2} partidos",
+               f"Las probabilidades varían hasta {amp * 100:.0f} pts según cuánta memoria se le dé al pasado"]
+    if cl:
+        if nivel == "Alta":
+            nivel = "Media"
+        razones.append("Si los equipos son de ligas distintas, la comparación depende de pocos cruces de Champions")
+        if nmin < 25:
+            razones.append("Algún equipo tiene poco historial: su rating se acerca al promedio")
+    return nivel, razones
+
+
+def completar(modelos, idx, h, a, cl=False):
+    ps = [predecir(M, h, a) for M in modelos]
+    pr = ps[len(ps) // 2]
+    rango = {k: [min(q[k] for q in ps), max(q[k] for q in ps)] for k in ("p1", "px", "p2")}
+    M = modelos[len(modelos) // 2]
+    nivel, razones = confianza(M["n"][h], M["n"][a], rango, cl)
+    info = lambda t: {"ataque": round(M["at"][t], 2), "defensa": round(M["df"][t], 2),
+                      "n": M["n"][t], "forma": forma(idx, t)}
+    pr.update(rango=rango, confianza=nivel, razones=razones, info_l=info(h), info_v=info(a))
+    return pr
+
+
+def backtest(por_liga, dias=300, paso=30):
+    """Predice cada partido solo con datos anteriores y mide qué tan bien acertó."""
+    filas = []
+    for ms in por_liga.values():
+        fin = max(m[0] for m in ms)
+        c = fin - timedelta(days=dias)
+        while c <= fin:
+            train = [m for m in ms if m[0] < c]
+            test = [m for m in ms if c <= m[0] < c + timedelta(days=paso)]
+            if len(train) >= 300 and test:
+                M = ajustar(train)
+                for d, h, a, hg, ag in test:
+                    if M["n"].get(h, 0) < MIN_PARTIDOS or M["n"].get(a, 0) < MIN_PARTIDOS:
+                        continue
+                    q = predecir(M, h, a)
+                    filas.append(([q["p1"], q["px"], q["p2"]],
+                                  0 if hg > ag else 1 if hg == ag else 2, CUOTAS.get((d, h, a))))
+            c += timedelta(days=paso)
+    if not filas:
+        return None
+    n = len(filas)
+    ll = lambda pr, k: -math.log(max(pr[k], 1e-9))
+    con = [f for f in filas if f[2]]
+    bins = [("menos de 40%", 0, .4), ("40–50%", .4, .5), ("50–60%", .5, .6), ("60–70%", .6, .7), ("70% o más", .7, 1.01)]
+    tabla = []
+    for nom, lo, hi in bins:
+        sel = [f for f in filas if lo <= max(f[0]) < hi]
+        if sel:
+            tabla.append([nom, len(sel), round(sum(max(f[0]) for f in sel) / len(sel), 3),
+                          round(sum(max(range(3), key=lambda i: f[0][i]) == f[1] for f in sel) / len(sel), 3)])
+    return {"n": n,
+            "acierto": round(sum(max(range(3), key=lambda i: f[0][i]) == f[1] for f in filas) / n, 3),
+            "base_local": round(sum(f[1] == 0 for f in filas) / n, 3),
+            "logloss": round(sum(ll(f[0], f[1]) for f in filas) / n, 4),
+            "n_mercado": len(con),
+            "logloss_modelo_vs_mercado": round(sum(ll(f[0], f[1]) for f in con) / len(con), 4) if con else None,
+            "logloss_mercado": round(sum(ll(f[2], f[1]) for f in con) / len(con), 4) if con else None,
+            "bins": tabla}
 
 
 def mercado(r):
@@ -289,20 +379,22 @@ def champions(token, nombres, base):
     print(f"  {len(hist)} partidos históricos + {len(res)} de la temporada actual; {len(fut)} por jugar")
     if not cl or not fut:
         return [], None
-    M = ajustar(base + cl, prior=PRIOR)
-    out = []
+    todo = base + cl
+    modelos = [ajustar(todo, PRIOR, xi) for xi in XIS]
+    idx, out = indice(todo), []
     for f in fut:
-        if M["n"].get(f["local"], 0) < MIN_CL or M["n"].get(f["visitante"], 0) < MIN_CL:
+        n = modelos[1]["n"]
+        if n.get(f["local"], 0) < MIN_CL or n.get(f["visitante"], 0) < MIN_CL:
             print(f"  sin historial suficiente: {f['local']} vs {f['visitante']}")
             continue
-        p = predecir(M, f["local"], f["visitante"])
-        p.update(liga="CL", mercado=None, **f)
-        out.append(p)
-    return out, {"nombre": "Champions League", "rho": round(M["rho"], 2), "historial": len(cl)}
+        pr = completar(modelos, idx, f["local"], f["visitante"], cl=True)
+        pr.update(liga="CL", mercado=None, **f)
+        out.append(pr)
+    return out, {"nombre": "Champions League", "rho": round(modelos[1]["rho"], 2), "historial": len(cl)}
 
 
 def main():
-    partidos, ligas, todos = [], {}, []
+    partidos, ligas, todos, por_liga = [], {}, [], {}
     nombres = Nombres()
     fx = descargar(f"{BASE}/fixtures.csv")
     print(f"{len(fx)} partidos en fixtures.csv")
@@ -313,8 +405,10 @@ def main():
             print("  datos insuficientes, se omite")
             continue
         todos += ms
+        por_liga[div] = ms
         nombres.registrar_liga(PAIS[div], {m[1] for m in ms} | {m[2] for m in ms})
-        M = ajustar(ms)
+        modelos, idx = [ajustar(ms, 0.0, xi) for xi in XIS], indice(ms)
+        M = modelos[1]
         ligas[div] = {"nombre": nombre, "rho": round(M["rho"], 2), "historial": len(ms)}
         for r in fx:
             if r.get("Div") != div:
@@ -322,10 +416,10 @@ def main():
             h, a, d = r.get("HomeTeam"), r.get("AwayTeam"), fecha(r.get("Date"))
             if not d or M["n"].get(h, 0) < MIN_PARTIDOS or M["n"].get(a, 0) < MIN_PARTIDOS:
                 continue
-            p = predecir(M, h, a)
-            p.update(liga=div, fecha=d.isoformat(), hora=r.get("Time") or "",
-                     local=h, visitante=a, mercado=mercado(r))
-            partidos.append(p)
+            pr = completar(modelos, idx, h, a)
+            pr.update(liga=div, fecha=d.isoformat(), hora=r.get("Time") or "",
+                      local=h, visitante=a, mercado=mercado(r))
+            partidos.append(pr)
     token = os.environ.get("FOOTBALL_DATA_TOKEN", "").strip()
     if token and todos:
         print("Champions League…")
@@ -335,11 +429,13 @@ def main():
             ligas["CL"] = info
     else:
         print("Champions League omitida: falta el secreto FOOTBALL_DATA_TOKEN")
-    partidos.sort(key=lambda p: (p["fecha"], p["hora"], p["liga"]))
+    print("Backtest…")
+    cal = backtest(por_liga) if por_liga else None
+    partidos.sort(key=lambda q: (q["fecha"], q["hora"], q["liga"]))
     SALIDA.parent.mkdir(parents=True, exist_ok=True)
     SALIDA.write_text(json.dumps(
         {"generado": datetime.now(timezone.utc).isoformat(timespec="minutes"),
-         "ligas": ligas, "partidos": partidos},
+         "ligas": ligas, "calibracion": cal, "partidos": partidos},
         ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"Listo: {len(partidos)} partidos escritos en {SALIDA}")
 
