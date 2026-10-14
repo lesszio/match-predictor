@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Match Predictor</title>
+<link href="https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0b0d12;--card:#12151c;--bd:#222733;--tx:#e7e9ee;--mu:#8b93a7;--ac:#7c8cff;--wa:#fbbf24;--ok:#4ade80;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:'Lexend',system-ui,sans-serif;font-weight:300;line-height:1.5;padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
+.w{max-width:760px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:22px;font-weight:600;margin:0 0 4px}.s{color:var(--mu);font-size:13px;margin:0 0 14px}
+input{width:100%;background:var(--card);border:1px solid var(--bd);border-radius:10px;color:var(--tx);padding:10px 12px;font:inherit;font-size:14px;margin-bottom:10px}
+input:focus{outline:none;border-color:var(--ac)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+.chip{background:var(--card);border:1px solid var(--bd);color:var(--mu);border-radius:999px;padding:5px 12px;font:inherit;font-size:13px;cursor:pointer}
+.chip.on{background:var(--ac);border-color:var(--ac);color:#0b0d12;font-weight:500}
+h2{font-size:13px;font-weight:500;color:var(--mu);text-transform:uppercase;letter-spacing:.08em;margin:18px 0 8px}
+.m{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:12px 14px;margin-bottom:8px;cursor:pointer}
+.m:hover{border-color:var(--ac)}
+.top{display:flex;justify-content:space-between;gap:8px;font-size:15px;font-weight:400}
+.top span:last-child{text-align:right}.meta{color:var(--mu);font-size:12px;margin:2px 0 8px}
+.bar{display:flex;height:8px;border-radius:5px;overflow:hidden}.bar i{display:block}
+.pc{display:flex;justify-content:space-between;font-size:12px;color:var(--mu);margin-top:4px}
+.det{display:none;margin-top:12px;border-top:1px solid var(--bd);padding-top:12px}.m.open .det{display:block}
+.g{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.st{background:var(--bg);border:1px solid var(--bd);border-radius:10px;padding:8px;text-align:center}
+.st b{display:block;font-size:18px;font-weight:600}.st small{color:var(--mu);font-size:11px}
+.sc{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.sc span{background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:3px 9px;font-size:12px}
+.mk{font-size:12px;color:var(--mu);margin-top:10px}.mk b{color:var(--tx);font-weight:400}
+#msg{color:var(--mu);font-size:14px;padding:20px 0;text-align:center}
+</style>
+</head>
+<body>
+<div class="w">
+<h1>⚽ Match Predictor</h1>
+<p class="s" id="up">Cargando…</p>
+<input id="q" type="text" placeholder="Buscar equipo…">
+<div class="chips" id="lg"></div>
+<div id="list"></div>
+<div id="msg"></div>
+</div>
+<script>
+let D=null,liga='';
+const $=id=>document.getElementById(id),pc=x=>(x*100).toFixed(0)+'%';
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+fetch('predicciones.json?'+Date.now()).then(r=>{if(!r.ok)throw 0;return r.json()}).then(d=>{D=d;init()}).catch(()=>{
+ $('up').textContent='';$('msg').textContent='No pude cargar predicciones.json. Si abriste el archivo directo, sírvelo con GitHub Pages o con "python -m http.server" dentro de /docs.'});
+function init(){
+ $('up').textContent=D.generado?'Actualizado: '+new Date(D.generado).toLocaleString('es',{dateStyle:'medium',timeStyle:'short'})+' · horas en UK':'';
+ const ks=Object.keys(D.ligas);
+ $('lg').innerHTML=['',...ks].map(k=>`<button class="chip${k===liga?' on':''}" data-k="${k}">${k?esc(D.ligas[k].nombre):'Todas'}</button>`).join('');
+ $('lg').querySelectorAll('button').forEach(b=>b.onclick=()=>{liga=b.dataset.k;init()});
+ render()}
+function render(){
+ const q=$('q').value.toLowerCase(),ps=D.partidos.filter(p=>(!liga||p.liga===liga)&&(p.local+' '+p.visitante).toLowerCase().includes(q));
+ let h='',day='';
+ for(const p of ps){
+  if(p.fecha!==day){day=p.fecha;h+=`<h2>${new Date(day+'T00:00').toLocaleDateString('es',{weekday:'long',day:'numeric',month:'long'})}</h2>`}
+  const mk=p.mercado?`<div class="mk">Mercado (sin margen): <b>${p.mercado.map(pc).join(' · ')}</b> · Modelo: <b>${[p.p1,p.px,p.p2].map(pc).join(' · ')}</b></div>`:'';
+  h+=`<div class="m"><div class="top"><span>${esc(p.local)}</span><span>${esc(p.visitante)}</span></div>
+  <div class="meta">${esc(D.ligas[p.liga].nombre)}${p.etapa?' · '+esc(p.etapa):''}${p.hora?' · '+esc(p.hora):''}</div>
+  <div class="bar"><i style="width:${p.p1*100}%;background:var(--ac)"></i><i style="width:${p.px*100}%;background:var(--mu)"></i><i style="width:${p.p2*100}%;background:var(--wa)"></i></div>
+  <div class="pc"><span>${pc(p.p1)}</span><span>${pc(p.px)}</span><span>${pc(p.p2)}</span></div>
+  <div class="det"><div class="g">
+  <div class="st"><b>${p.xg_l} – ${p.xg_v}</b><small>xG local – visitante</small></div>
+  <div class="st"><b>${(1/p.p1).toFixed(2)} · ${(1/p.px).toFixed(2)} · ${(1/p.p2).toFixed(2)}</b><small>Cuotas justas 1 · X · 2</small></div>
+  <div class="st"><b>${pc(p.o25)}</b><small>Más de 2.5 goles</small></div>
+  <div class="st"><b>${pc(p.btts)}</b><small>Ambos anotan</small></div></div>
+  <div class="sc">${p.top.map(s=>`<span>${s[0]} · ${(s[1]*100).toFixed(1)}%</span>`).join('')}</div>${mk}</div></div>`}
+ $('list').innerHTML=h;
+ $('msg').textContent=ps.length?'':(D.partidos.length?'Sin resultados para ese filtro.':'Aún no hay predicciones. Ejecuta la acción "Actualizar predicciones" en GitHub o espera al próximo ciclo diario.');
+ $('list').querySelectorAll('.m').forEach(m=>m.onclick=()=>m.classList.toggle('open'))}
+$('q').oninput=()=>D&&render();
+</script>
+</body>
+</html>
