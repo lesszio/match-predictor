@@ -20,6 +20,7 @@ jobs:
         run: python predictor.py
         env:
           FOOTBALL_DATA_TOKEN: ${{ secrets.FOOTBALL_DATA_TOKEN }}
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
       - name: Guardar resultados
         run: |
           git config user.name "predictor-bot"
