@@ -19,7 +19,10 @@ PAIS = {"E0": "ENG", "SP1": "ESP", "I1": "ITA", "D1": "GER", "F1": "FRA"}
 PRIOR = 3.0          # contracción hacia el promedio para equipos con poca muestra (Champions)
 XIS = (0.0012, 0.0025, 0.0050)   # memoria larga / central / corta: mide la sensibilidad
 CUOTAS = {}          # (fecha, local, visitante) -> prob. implícitas del mercado, para el backtest
-MIN_CL = 6           # mínimo de partidos por equipo para predecir Champions
+MIN_CL = 6
+DIAS = 14             # horizonte de partidos próximos al usar APIs
+AF_IDS = {"E0": 39, "SP1": 140, "I1": 135, "D1": 78, "F1": 61}   # API-Football
+FDO = {"E0": "PL", "SP1": "PD", "I1": "SA", "D1": "BL1", "F1": "FL1"}  # football-data.org           # mínimo de partidos por equipo para predecir Champions
 OF_URL = "https://raw.githubusercontent.com/openfootball/champions-league/master/{t}/cl.txt"
 SALIDA = Path(__file__).parent / "docs" / "predicciones.json"
 
@@ -337,9 +340,9 @@ ETAPAS = {"PLAYOFFS": "Playoffs", "LAST_16": "Octavos", "QUARTER_FINALS": "Cuart
           "SEMI_FINALS": "Semifinales", "FINAL": "Final"}
 
 
-def cl_api(token, y, nombres):
+def fdo_partidos(token, comp, y, nombres, pais=None):
     """Resultados de la temporada en curso y próximos partidos (football-data.org)."""
-    txt = bajar(f"https://api.football-data.org/v4/competitions/CL/matches?season={y}",
+    txt = bajar(f"https://api.football-data.org/v4/competitions/{comp}/matches?season={y}",
                 {"X-Auth-Token": token})
     try:
         datos = json.loads(txt)["matches"]
@@ -352,7 +355,7 @@ def cl_api(token, y, nombres):
         h, a = (m.get("homeTeam") or {}).get("name"), (m.get("awayTeam") or {}).get("name")
         if not h or not a:
             continue
-        h, a = nombres.canon(h), nombres.canon(a)
+        h, a = nombres.canon(h, pais), nombres.canon(a, pais)
         d = datetime.fromisoformat(m["utcDate"].replace("Z", "+00:00")).astimezone(zona)
         sc = m.get("score") or {}
         if m.get("status") == "FINISHED":
@@ -361,7 +364,8 @@ def cl_api(token, y, nombres):
                 res.append((d.date(), h, a, int(ft["home"]), int(ft["away"])))
         elif m.get("status") in ("SCHEDULED", "TIMED"):
             st = m.get("stage", "")
-            etapa = f"Fase de liga J{m.get('matchday')}" if st == "LEAGUE_STAGE" else ETAPAS.get(st, st.title())
+            etapa = (f"Fase de liga J{m.get('matchday')}" if st == "LEAGUE_STAGE" else
+                     f"Jornada {m.get('matchday')}" if st == "REGULAR_SEASON" else ETAPAS.get(st, st.title()))
             fut.append({"fecha": d.date().isoformat(), "hora": d.strftime("%H:%M"),
                         "local": h, "visitante": a, "etapa": etapa})
     return res, fut
@@ -374,7 +378,7 @@ def champions(token, nombres, base):
     for k in range(1, TEMPORADAS):
         t = f"{y - k}-{(y - k + 1) % 100:02d}"
         hist += cl_texto(bajar(OF_URL.format(t=t)), nombres)
-    res, fut = cl_api(token, y, nombres)
+    res, fut = fdo_partidos(token, "CL", y, nombres)
     cl = hist + res
     print(f"  {len(hist)} partidos históricos + {len(res)} de la temporada actual; {len(fut)} por jugar")
     if not cl or not fut:
@@ -393,9 +397,39 @@ def champions(token, nombres, base):
     return out, {"nombre": "Champions League", "rho": round(modelos[1]["rho"], 2), "historial": len(cl)}
 
 
+def af_proximos(key, div, y, nombres):
+    """Próximos partidos de una liga vía API-Football. None si el plan/clave no lo permite."""
+    hoy = date.today()
+    url = (f"https://v3.football.api-sports.io/fixtures?league={AF_IDS[div]}&season={y}"
+           f"&from={hoy}&to={hoy + timedelta(days=DIAS)}")
+    try:
+        d = json.loads(bajar(url, {"x-apisports-key": key}))
+    except ValueError:
+        return None
+    if d.get("errors"):
+        print(f"  ! API-Football: {d['errors']}")
+        return None
+    zona = ZoneInfo("Europe/London") if ZoneInfo else timezone.utc
+    out = []
+    for m in d.get("response", []):
+        if m["fixture"]["status"]["short"] not in ("NS", "TBD"):
+            continue
+        t = datetime.fromisoformat(m["fixture"]["date"]).astimezone(zona)
+        ronda = re.search(r"(\d+)\s*$", m["league"].get("round") or "")
+        out.append({"fecha": t.date().isoformat(), "hora": t.strftime("%H:%M"),
+                    "local": nombres.canon(m["teams"]["home"]["name"], PAIS[div]),
+                    "visitante": nombres.canon(m["teams"]["away"]["name"], PAIS[div]),
+                    "etapa": f"Jornada {ronda.group(1)}" if ronda else ""})
+    return out
+
+
 def main():
     partidos, ligas, todos, por_liga = [], {}, [], {}
     nombres = Nombres()
+    token = os.environ.get("FOOTBALL_DATA_TOKEN", "").strip()
+    key_af = os.environ.get("API_FOOTBALL_KEY", "").strip()
+    hoy = date.today()
+    y = hoy.year if hoy.month >= 7 else hoy.year - 1
     fx = descargar(f"{BASE}/fixtures.csv")
     print(f"{len(fx)} partidos en fixtures.csv")
     for div, nombre in LIGAS.items():
@@ -410,17 +444,32 @@ def main():
         modelos, idx = [ajustar(ms, 0.0, xi) for xi in XIS], indice(ms)
         M = modelos[1]
         ligas[div] = {"nombre": nombre, "rho": round(M["rho"], 2), "historial": len(ms)}
-        for r in fx:
-            if r.get("Div") != div:
-                continue
-            h, a, d = r.get("HomeTeam"), r.get("AwayTeam"), fecha(r.get("Date"))
-            if not d or M["n"].get(h, 0) < MIN_PARTIDOS or M["n"].get(a, 0) < MIN_PARTIDOS:
-                continue
-            pr = completar(modelos, idx, h, a)
-            pr.update(liga=div, fecha=d.isoformat(), hora=r.get("Time") or "",
-                      local=h, visitante=a, mercado=mercado(r))
+
+        def agregar(f, mkt):
+            if M["n"].get(f["local"], 0) < MIN_PARTIDOS or M["n"].get(f["visitante"], 0) < MIN_PARTIDOS:
+                print(f"  sin historial suficiente: {f['local']} vs {f['visitante']}")
+                return False
+            pr = completar(modelos, idx, f["local"], f["visitante"])
+            pr.update(liga=div, mercado=mkt, **f)
             partidos.append(pr)
-    token = os.environ.get("FOOTBALL_DATA_TOKEN", "").strip()
+            return True
+
+        n_csv = 0
+        for r in fx:                       # 1) fixtures.csv (incluye cuotas del mercado)
+            d = fecha(r.get("Date"))
+            if r.get("Div") == div and d:
+                n_csv += agregar({"fecha": d.isoformat(), "hora": r.get("Time") or "",
+                                  "local": r.get("HomeTeam"), "visitante": r.get("AwayTeam")}, mercado(r))
+        extra, fuente = None, ""            # 2) APIs como complemento
+        if key_af:
+            extra, fuente = af_proximos(key_af, div, y, nombres), "API-Football"
+        if extra is None and token:
+            _, fut = fdo_partidos(token, FDO[div], y, nombres, PAIS[div])
+            tope = (hoy + timedelta(days=DIAS)).isoformat()
+            extra, fuente = [f for f in fut if f["fecha"] <= tope], "football-data.org"
+        vistos = {(q["local"], q["visitante"]) for q in partidos if q["liga"] == div}
+        n_api = sum(agregar(f, None) for f in (extra or []) if (f["local"], f["visitante"]) not in vistos)
+        print(f"  {n_csv} partidos de fixtures.csv, {n_api} de {fuente or 'ninguna API'}")
     if token and todos:
         print("Champions League…")
         cl, info = champions(token, nombres, todos)
