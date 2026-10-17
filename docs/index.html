@@ -38,6 +38,7 @@ ul{margin:6px 0 0;padding-left:18px}li{font-size:12px;color:var(--mu)}
 .mb{height:6px;background:var(--bg);border-radius:4px;margin:3px 0 8px;overflow:hidden}.mb i{display:block;height:100%;background:var(--ac)}
 .f{display:inline-block;min-width:42px;text-align:center;border-radius:6px;padding:1px 5px;font-size:11px;margin:0 3px 3px 0}
 .f.G{background:rgba(74,222,128,.15);color:var(--ok)}.f.E{background:rgba(139,147,167,.2);color:var(--mu)}.f.P{background:rgba(248,113,113,.15);color:var(--rd)}
+.sx{background:var(--bg);border:1px solid var(--bd);border-radius:10px;padding:8px 10px}.sx b{font-weight:500;font-size:13px}
 .mk{font-size:12px;color:var(--mu);margin-top:10px}.mk b{color:var(--tx);font-weight:400}
 table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}td,th{padding:4px 2px;border-bottom:1px solid var(--bd);text-align:right;font-weight:300}td:first-child,th:first-child{text-align:left}th{color:var(--mu)}
 #msg{color:var(--mu);font-size:14px;padding:20px 0;text-align:center}
@@ -45,7 +46,7 @@ table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}td,th{pa
 </head>
 <body>
 <div class="w">
-<h1>Match Predictor</h1>
+<h1>⚽ Match Predictor</h1>
 <p class="s" id="up">Cargando…</p>
 <input id="q" type="text" placeholder="Buscar equipo…">
 <div class="chips" id="lg"></div>
@@ -59,6 +60,7 @@ table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}td,th{pa
 <li><b>"Goles esperados"</b> son los del modelo (promedio de goles que implican los ratings), no el xG de tiros.</li>
 <li><b>Champions:</b> equipos de ligas distintas se comparan solo por sus cruces europeos, así que hay más incertidumbre. Los equipos con poco historial se acercan al promedio.</li>
 <li><b>Rangos entre paréntesis:</b> cuánto cambia la probabilidad si el modelo recuerda más o menos el pasado. Indican sensibilidad, no son un intervalo estadístico formal.</li>
+<li><b>Córners, tarjetas y tiros:</b> solo existen para las ligas domésticas (la fuente de Champions no los incluye). Dependen mucho del árbitro y del contexto del partido, que el modelo no conoce, así que son más ruidosos que los goles.</li>
 <li><b>Mercado:</b> las cuotas de casas suelen ser más precisas que este modelo. Úsalo como referencia, no como garantía ni consejo de apuestas.</li>
 </ul></details>
 </div>
@@ -78,13 +80,21 @@ function init(){
  <p>En <b>${c.n}</b> partidos recientes de las 5 ligas, predichos usando solo datos anteriores a cada uno, el resultado que el modelo veía más probable ocurrió el <b>${pc(c.acierto)}</b> de las veces (apostar siempre al local: ${pc(c.base_local)}).</p>
  ${c.logloss_mercado?`<p>Error probabilístico (log loss, menor es mejor) en ${c.n_mercado} partidos con cuotas: modelo <b>${c.logloss_modelo_vs_mercado}</b> vs. mercado <b>${c.logloss_mercado}</b>.</p>`:''}
  <table><tr><th>Cuando el favorito tenía</th><th>Partidos</th><th>Modelo decía</th><th>Ocurrió</th></tr>${c.bins.map(b=>`<tr><td>${b[0]}</td><td>${b[1]}</td><td>${p1(b[2])}</td><td>${p1(b[3])}</td></tr>`).join('')}</table>
- <p>Si "decía" y "ocurrió" se parecen, las probabilidades son confiables en ese tramo.</p></details>`:'';
+ <p>Si "decía" y "ocurrió" se parecen, las probabilidades son confiables en ese tramo.</p>
+ ${c.goles?`<p>Goles por partido: el modelo esperaba <b>${c.goles.pred}</b> y hubo <b>${c.goles.real}</b>. Probabilidad de más de 2.5 goles:</p><table><tr><th>Modelo decía</th><th>Partidos</th><th>Promedio dicho</th><th>Ocurrió</th></tr>${c.goles.bins.map(b=>`<tr><td>${b[0]}</td><td>${b[1]}</td><td>${p1(b[2])}</td><td>${p1(b[3])}</td></tr>`).join('')}</table>`:''}
+ ${D.calibracion_stats?`<p>Córners, tarjetas y tiros: error medio del total (menor es mejor).</p><table><tr><th>Estadística</th><th>Modelo</th><th>Solo el promedio</th></tr>${Object.values(D.calibracion_stats).map(s=>`<tr><td>${esc(s.nombre)}</td><td>${s.mae_modelo}</td><td>${s.mae_base}</td></tr>`).join('')}</table><p>Si el modelo no mejora al promedio, esa estadística es poco predecible: tómala con cautela.</p>`:''}</details>`:'';
  render()}
 const eq=(n,i)=>`<div class="tm"><b>${esc(n)}</b>
  <div class="s2">Ataque ${i.ataque}× (${sg((i.ataque-1)*100)}% vs promedio)</div><div class="mb"><i style="width:${Math.min(100,i.ataque*50)}%"></i></div>
  <div class="s2">Defensa ${i.defensa}× · concede ${sg((i.defensa-1)*100)}% vs promedio</div><div class="mb"><i style="width:${Math.max(0,Math.min(100,(2-i.defensa)*50))}%"></i></div>
  <div>${i.forma.map(f=>`<span class="f ${f[0]}" title="vs ${esc(f[2])} (${f[3]==='L'?'local':'visita'})">${f[0]} ${f[1]}</span>`).join('')}</div>
  <div class="s2">${i.n} partidos en el modelo</div></div>`;
+const SN={c:'Córners',y:'Tarjetas amarillas',r:'Tarjetas rojas',f:'Faltas',sot:'Tiros a puerta',s:'Tiros'};
+function statsHtml(p){
+ const ks=['c','y','r','f','sot','s'].filter(k=>p.stats&&p.stats[k]);
+ if(!ks.length)return '<div class="sec">Estadísticas extra</div><div class="s2">No disponibles para este partido (las fuentes gratuitas de Champions no incluyen córners ni tarjetas).</div>';
+ return '<div class="sec">Estadísticas extra (esperado local – visita)</div><div class="cols">'+ks.map(k=>{const s=p.stats[k];
+  return `<div class="sx"><b>${SN[k]}</b><div class="s2">${s.l} – ${s.v} · total ${s.tot}</div><div class="sc" style="margin-top:6px">${s.lineas.map(l=>`<span>${k==='r'&&l[0]===0.5?'Alguna roja':'Más de '+l[0]} · ${pc(l[1])}</span>`).join('')}</div>${k==='r'?'':`<div class="s2" style="margin-top:6px">Más ${SN[k].toLowerCase()}: local ${pc(s.mas_l)} · visita ${pc(s.mas_v)}</div>`}</div>`}).join('')+'</div>'}
 const bx=(v,l)=>`<div class="st"><b>${v}</b><small>${l}</small></div>`;
 function render(){
  const q=$('q').value.toLowerCase(),ps=D.partidos.filter(p=>(!liga||p.liga===liga)&&(p.local+' '+p.visitante).toLowerCase().includes(q));
@@ -107,6 +117,7 @@ function render(){
   ${bx(pc(p.o15),'Más de 1.5')}${bx(pc(p.o25),'Más de 2.5')}${bx(pc(p.o35),'Más de 3.5')}
   ${bx(pc(p.cs_l),'Local no recibe gol')}${bx(pc(p.cs_v),'Visita no recibe gol')}${bx(pc(p.h2),'Local gana por 2+')}</div>
   <div class="sec">Marcadores más probables</div><div class="sc">${p.top.map(s=>`<span>${s[0]} · ${p1(s[1])}</span>`).join('')}</div>
+  ${statsHtml(p)}
   <div class="sec">Equipos (ataque/defensa vs promedio · últimos 5, el más reciente primero)</div>
   <div class="cols">${eq(p.local,p.info_l)}${eq(p.visitante,p.info_v)}</div>
   <div class="sec">Confiabilidad de este partido</div>
