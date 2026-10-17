@@ -12,12 +12,18 @@ except ImportError:
 LIGAS = {"E0": "Premier League", "SP1": "LaLiga", "I1": "Serie A",
          "D1": "Bundesliga", "F1": "Ligue 1"}
 TEMPORADAS = 3        # temporadas de historial
-XI = 0.0025           # decaimiento diario (partidos recientes pesan más)
+XI = 0.0008           # decaimiento diario (calibrado con datos reales: memoria larga rinde mejor)
+SHRINK_TOT = 0.7      # acerca el total de goles esperado al promedio de la liga (calibrado con datos reales)
+PRIOR_LIGA = 3.0      # contracción de ratings hacia el promedio (calibrada con datos reales)
 MIN_PARTIDOS = 10     # mínimo de partidos por equipo para predecir
 BASE = "https://www.football-data.co.uk"
 PAIS = {"E0": "ENG", "SP1": "ESP", "I1": "ITA", "D1": "GER", "F1": "FRA"}
-PRIOR = 3.0          # contracción hacia el promedio para equipos con poca muestra (Champions)
-XIS = (0.0012, 0.0025, 0.0050)   # memoria larga / central / corta: mide la sensibilidad
+PRIOR = 6.0           # contracción en el modelo conjunto de Champions (equipos con poca muestra)
+XIS = (0.0004, 0.0008, 0.0016)   # memoria larga / central / corta: mide la sensibilidad
+STATS = {"c": ("HC", "AC", "Córners"), "y": ("HY", "AY", "Tarjetas amarillas"),
+         "r": ("HR", "AR", "Tarjetas rojas"), "f": ("HF", "AF", "Faltas"),
+         "sot": ("HST", "AST", "Tiros a puerta"), "s": ("HS", "AS", "Tiros")}
+ESTAD = {}           # (fecha, local, visitante) -> {clave: (local, visitante)}
 CUOTAS = {}          # (fecha, local, visitante) -> prob. implícitas del mercado, para el backtest
 MIN_CL = 6
 DIAS = 14             # horizonte de partidos próximos al usar APIs
@@ -68,6 +74,13 @@ def historial(div):
             if d and r.get("HomeTeam") and r.get("AwayTeam"):
                 out.append((d, r["HomeTeam"], r["AwayTeam"], hg, ag))
                 CUOTAS[(d, r["HomeTeam"], r["AwayTeam"])] = mercado(r)
+                e = {}
+                for k, (ch, ca, _) in STATS.items():
+                    try:
+                        e[k] = (int(r[ch]), int(r[ca]))
+                    except (KeyError, ValueError, TypeError):
+                        pass
+                ESTAD[(d, r["HomeTeam"], r["AwayTeam"])] = e
     return out
 
 
@@ -83,7 +96,7 @@ def tau(x, y, l, m, r):
     return 1.0
 
 
-def ajustar(ms, prior=0.0, xi=XI):
+def ajustar(ms, prior=PRIOR_LIGA, xi=XI):
     """Ataque/defensa/localía por punto fijo ponderado + rho de Dixon-Coles."""
     hoy = max(m[0] for m in ms)
     w = [math.exp(-xi * (hoy - m[0]).days) for m in ms]
@@ -98,8 +111,9 @@ def ajustar(ms, prior=0.0, xi=XI):
         for (d, h, a, hg, ag), wi in zip(ms, w):
             nA[h] += wi * hg; dA[h] += wi * df[a] * g
             nA[a] += wi * ag; dA[a] += wi * df[h]
+        ma = sum(at.values()) / len(at)       # la contracción apunta al promedio, no a 1
         for t in eq:
-            at[t] = (nA[t] + prior) / (dA[t] + prior)
+            at[t] = (nA[t] + prior * ma) / (dA[t] + prior)
         mean = sum(at.values()) / len(at)
         for t in eq:
             at[t] /= mean
@@ -108,8 +122,9 @@ def ajustar(ms, prior=0.0, xi=XI):
         for (d, h, a, hg, ag), wi in zip(ms, w):
             nD[a] += wi * hg; dD[a] += wi * at[h] * g
             nD[h] += wi * ag; dD[h] += wi * at[a]
+        md = sum(df.values()) / len(df)
         for t in eq:
-            df[t] = (nD[t] + prior) / (dD[t] + prior)
+            df[t] = (nD[t] + prior * md) / (dD[t] + prior)
         # 3) ventaja de localía
         sg = sl = 0.0
         for (d, h, a, hg, ag), wi in zip(ms, w):
@@ -125,12 +140,14 @@ def ajustar(ms, prior=0.0, xi=XI):
             ll += wi * math.log(t) if t > 0 else -1e6
         if ll > bl:
             bl, mejor = ll, r
-    return {"at": at, "df": df, "g": g, "rho": mejor, "n": n}
+    return {"at": at, "df": df, "g": g, "rho": mejor, "n": n, "tm": sum(m[3] + m[4] for m in ms) / len(ms)}
 
 
 def predecir(M, h, a, N=10):
     l = M["at"][h] * M["df"][a] * M["g"]
     m = M["at"][a] * M["df"][h]
+    f = (M["tm"] + SHRINK_TOT * (l + m - M["tm"])) / (l + m)   # el reparto local/visita no cambia
+    l, m = l * f, m * f
     P, s = {}, 0.0
     for x in range(N):
         for y in range(N):
@@ -214,7 +231,8 @@ def backtest(por_liga, dias=300, paso=30):
                         continue
                     q = predecir(M, h, a)
                     filas.append(([q["p1"], q["px"], q["p2"]],
-                                  0 if hg > ag else 1 if hg == ag else 2, CUOTAS.get((d, h, a))))
+                                  0 if hg > ag else 1 if hg == ag else 2, CUOTAS.get((d, h, a)),
+                                  q["o25"], q["xg_l"] + q["xg_v"], hg + ag))
             c += timedelta(days=paso)
     if not filas:
         return None
@@ -228,6 +246,13 @@ def backtest(por_liga, dias=300, paso=30):
         if sel:
             tabla.append([nom, len(sel), round(sum(max(f[0]) for f in sel) / len(sel), 3),
                           round(sum(max(range(3), key=lambda i: f[0][i]) == f[1] for f in sel) / len(sel), 3)])
+    gb = []
+    for nom, lo, hi in (("menos de 40%", 0, .4), ("40–50%", .4, .5), ("50–60%", .5, .6), ("60% o más", .6, 1.01)):
+        sel = [f for f in filas if lo <= f[3] < hi]
+        if sel:
+            gb.append([nom, len(sel), round(sum(f[3] for f in sel) / len(sel), 3),
+                       round(sum(f[5] > 2.5 for f in sel) / len(sel), 3)])
+    goles = {"pred": round(sum(f[4] for f in filas) / n, 2), "real": round(sum(f[5] for f in filas) / n, 2), "bins": gb}
     return {"n": n,
             "acierto": round(sum(max(range(3), key=lambda i: f[0][i]) == f[1] for f in filas) / n, 3),
             "base_local": round(sum(f[1] == 0 for f in filas) / n, 3),
@@ -235,7 +260,7 @@ def backtest(por_liga, dias=300, paso=30):
             "n_mercado": len(con),
             "logloss_modelo_vs_mercado": round(sum(ll(f[0], f[1]) for f in con) / len(con), 4) if con else None,
             "logloss_mercado": round(sum(ll(f[2], f[1]) for f in con) / len(con), 4) if con else None,
-            "bins": tabla}
+            "bins": tabla, "goles": goles}
 
 
 def mercado(r):
@@ -397,6 +422,86 @@ def champions(token, nombres, base):
     return out, {"nombre": "Champions League", "rho": round(modelos[1]["rho"], 2), "historial": len(cl)}
 
 
+def nb_pmf(mu, alpha, n=50):
+    """Binomial negativa (más realista que Poisson para córners, tarjetas, tiros)."""
+    if mu <= 0:
+        return [1.0] + [0.0] * (n - 1)
+    if alpha < 1e-4:
+        return [pois(k, mu) for k in range(n)]
+    r = 1 / alpha
+    q = r / (r + mu)
+    return [math.exp(math.lgamma(k + r) - math.lgamma(r) - math.lgamma(k + 1)
+                     + r * math.log(q) + k * math.log(1 - q)) for k in range(n)]
+
+
+def ajustar_stat(clave, ms, xi=XI):
+    """Mismo modelo ataque/defensa/localía, aplicado a una estadística (córners, tarjetas...)."""
+    t = []
+    for d, h, a, _, _ in ms:
+        e = ESTAD.get((d, h, a), {}).get(clave)
+        if e:
+            t.append((d, h, a, e[0], e[1]))
+    if len(t) < 100:
+        return None
+    media = sum(x + y for _, _, _, x, y in t) / (2 * len(t))
+    M = ajustar(t, media * (40 if clave == "r" else 6), xi)   # ~6 partidos de contracción (40 en rojas)
+    num = den = 0.0
+    for d, h, a, x, y in t:
+        lh, la = M["at"][h] * M["df"][a] * M["g"], M["at"][a] * M["df"][h]
+        num += (x - lh) ** 2 - lh + (y - la) ** 2 - la
+        den += lh * lh + la * la
+    M["alpha"] = max(num / den, 0.0)
+    return M
+
+
+def predecir_stat(M, h, a, n=50):
+    if M["n"].get(h, 0) < MIN_PARTIDOS or M["n"].get(a, 0) < MIN_PARTIDOS:
+        return None
+    lh, la = M["at"][h] * M["df"][a] * M["g"], M["at"][a] * M["df"][h]
+    ph, pa = nb_pmf(lh, M["alpha"], n), nb_pmf(la, M["alpha"], n)
+    tot = [0.0] * n
+    for i, x in enumerate(ph):
+        for j, y in enumerate(pa):
+            if i + j < n:
+                tot[i + j] += x * y
+    base = math.floor(lh + la) + 0.5
+    lineas = [[base + k, round(sum(tot[int(base + k) + 1:]), 3)] for k in (-1, 0, 1) if base + k > 0]
+    return {"l": round(lh, 2), "v": round(la, 2), "tot": round(lh + la, 2), "lineas": lineas,
+            "mas_l": round(sum(ph[i] * sum(pa[:i]) for i in range(n)), 3),
+            "mas_v": round(sum(pa[i] * sum(ph[:i]) for i in range(n)), 3)}
+
+
+def backtest_stats(por_liga, dias=300, paso=60):
+    """Error medio del total predicho vs. siempre predecir el promedio de la liga."""
+    acc = {k: [0, 0.0, 0.0] for k in STATS}
+    for ms in por_liga.values():
+        fin = max(m[0] for m in ms)
+        c = fin - timedelta(days=dias)
+        while c <= fin:
+            train = [m for m in ms if m[0] < c]
+            test = [m for m in ms if c <= m[0] < c + timedelta(days=paso)]
+            if len(train) >= 300 and test:
+                for k in STATS:
+                    M = ajustar_stat(k, train)
+                    reales = [ESTAD.get((m[0], m[1], m[2]), {}).get(k) for m in train]
+                    reales = [sum(e) for e in reales if e]
+                    if not M or not reales:
+                        continue
+                    media = sum(reales) / len(reales)
+                    for d, h, a, _, _ in test:
+                        e = ESTAD.get((d, h, a), {}).get(k)
+                        if not e or M["n"].get(h, 0) < MIN_PARTIDOS or M["n"].get(a, 0) < MIN_PARTIDOS:
+                            continue
+                        real = sum(e)
+                        pred = M["at"][h] * M["df"][a] * M["g"] + M["at"][a] * M["df"][h]
+                        acc[k][0] += 1
+                        acc[k][1] += abs(pred - real)
+                        acc[k][2] += abs(media - real)
+            c += timedelta(days=paso)
+    return {k: {"nombre": STATS[k][2], "n": v[0], "mae_modelo": round(v[1] / v[0], 2),
+                "mae_base": round(v[2] / v[0], 2)} for k, v in acc.items() if v[0]}
+
+
 def af_proximos(key, div, y, nombres):
     """Próximos partidos de una liga vía API-Football. None si el plan/clave no lo permite."""
     hoy = date.today()
@@ -441,8 +546,9 @@ def main():
         todos += ms
         por_liga[div] = ms
         nombres.registrar_liga(PAIS[div], {m[1] for m in ms} | {m[2] for m in ms})
-        modelos, idx = [ajustar(ms, 0.0, xi) for xi in XIS], indice(ms)
+        modelos, idx = [ajustar(ms, PRIOR_LIGA, xi) for xi in XIS], indice(ms)
         M = modelos[1]
+        smod = {k: ajustar_stat(k, ms) for k in STATS}
         ligas[div] = {"nombre": nombre, "rho": round(M["rho"], 2), "historial": len(ms)}
 
         def agregar(f, mkt):
@@ -451,6 +557,11 @@ def main():
                 return False
             pr = completar(modelos, idx, f["local"], f["visitante"])
             pr.update(liga=div, mercado=mkt, **f)
+            pr["stats"] = {}
+            for k, SM in smod.items():
+                s = SM and predecir_stat(SM, f["local"], f["visitante"])
+                if s:
+                    pr["stats"][k] = s
             partidos.append(pr)
             return True
 
@@ -480,11 +591,13 @@ def main():
         print("Champions League omitida: falta el secreto FOOTBALL_DATA_TOKEN")
     print("Backtest…")
     cal = backtest(por_liga) if por_liga else None
+    print("Backtest de córners, tarjetas…")
+    cal_s = backtest_stats(por_liga) if por_liga else None
     partidos.sort(key=lambda q: (q["fecha"], q["hora"], q["liga"]))
     SALIDA.parent.mkdir(parents=True, exist_ok=True)
     SALIDA.write_text(json.dumps(
         {"generado": datetime.now(timezone.utc).isoformat(timespec="minutes"),
-         "ligas": ligas, "calibracion": cal, "partidos": partidos},
+         "ligas": ligas, "calibracion": cal, "calibracion_stats": cal_s, "partidos": partidos},
         ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"Listo: {len(partidos)} partidos escritos en {SALIDA}")
 
